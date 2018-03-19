@@ -4,7 +4,7 @@ const { limitPromises } = require('../../core/Utils')
 
 const MB = 1024 * 1024
 
-module.exports = class AwsS3 extends Plugin {
+module.exports = class AwsS3Multipart extends Plugin {
   constructor (uppy, opts) {
     super(uppy, opts)
     this.type = 'uploader'
@@ -35,6 +35,7 @@ module.exports = class AwsS3 extends Plugin {
     this.i18n = this.translator.translate.bind(this.translator)
 
     this.prepareUpload = this.prepareUpload.bind(this)
+    this.upload = this.upload.bind(this)
 
     if (typeof this.opts.limit === 'number' && this.opts.limit !== 0) {
       this.limitRequests = limitPromises(this.opts.limit)
@@ -48,8 +49,8 @@ module.exports = class AwsS3 extends Plugin {
     const chunkSize = Math.max(Math.ceil(file.size / 10000), 5 * MB)
 
     for (let i = 0; i < file.size; i += chunkSize) {
-      const end = Math.min(file.size, (i + 1) * chunkSize)
-      chunks.push(file.slice(i * chunkSize, end))
+      const end = Math.min(file.size, i + chunkSize)
+      chunks.push(file.slice(i, end))
     }
 
     return chunks
@@ -67,7 +68,7 @@ module.exports = class AwsS3 extends Plugin {
     const filename = encodeURIComponent(file.name)
     const type = encodeURIComponent(file.type)
     return fetch(`${this.opts.host}/s3/multipart?filename=${filename}&type=${type}`, {
-      method: 'get',
+      method: 'post',
       headers: { accept: 'application/json' }
     }).then((response) => response.json())
   }
@@ -76,13 +77,14 @@ module.exports = class AwsS3 extends Plugin {
     this.assertHost()
 
     const filename = encodeURIComponent(key)
-    return fetch(`${this.opts.host}/s3/multipart/${uploadId}?key=${filename}`, {
+    return fetch(`${this.opts.host}/s3/multipart/${uploadId}/${number}?key=${filename}`, {
       method: 'get',
       headers: { accept: 'application/json' }
     }).then((response) => response.json())
   }
 
   uploadPart (url, body, onProgress) {
+    this.uppy.log(`Uploading a chunk of ${body.size} bytes to ${url}`)
     return new Promise((resolve, reject) => {
       var xhr = new XMLHttpRequest()
       xhr.open('PUT', url, true)
@@ -101,6 +103,7 @@ module.exports = class AwsS3 extends Plugin {
 
         onProgress(body.size)
 
+        // NOTE This must be allowed by CORS.
         const etag = ev.target.getResponseHeader('ETag')
         resolve({ etag })
       })
@@ -190,8 +193,6 @@ module.exports = class AwsS3 extends Plugin {
   uploadFile (file) {
     const chunks = this.splitFile(file.data)
 
-    const prepareUploadPart = this.limitRequests(this.opts.prepareUploadPart)
-    const uploadPart = this.limitRequests(this.uploadPart)
     const completeMultipartUpload = this.limitRequests(this.opts.completeMultipartUpload)
 
     this.uppy.emit('upload-started', file)
@@ -200,16 +201,23 @@ module.exports = class AwsS3 extends Plugin {
     // Keep track of progress for chunks individually, so it's easy to reset progress if one of them fails.
     const currentProgress = chunks.map(() => 0)
 
-    const partUploads = chunks.map((chunk, index) => {
+    const doUploadPart = (chunk, index) => {
       return Promise.resolve(
-        prepareUploadPart(file, {
+        this.opts.prepareUploadPart(file, {
           key: file.s3Multipart.key,
           uploadId: file.s3Multipart.uploadId,
           body: chunk,
           number: index + 1
         })
-      ).then(({ url }) => {
-        return uploadPart(url, chunk, (current) => {
+      ).then((result) => {
+        const valid = typeof result === 'object' && result &&
+          typeof result.url === 'string'
+        if (!valid) {
+          throw new TypeError(`AwsS3/Multipart: Got incorrect result from 'prepareUploadPart()' for file '${file.name}', expected an object '{ url }'.`)
+        }
+        return result
+      }).then(({ url }) => {
+        return this.uploadPart(url, chunk, (current) => {
           currentProgress[index] = current
 
           this.uppy.emit('upload-progress', this.uppy.getFile(file.id), {
@@ -222,6 +230,14 @@ module.exports = class AwsS3 extends Plugin {
           PartNumber: index + 1
         }))
       })
+    }
+
+    // Limit this bundle of Prepare + Upload request instead of the individual requests;
+    // otherwise there might be too much time between Prepare and Upload (> 5 minutes).
+    const uploadPart = this.limitRequests(doUploadPart)
+
+    const partUploads = chunks.map((chunk, index) => {
+      return uploadPart(chunk, index)
     })
 
     return Promise.all(partUploads).then((parts) => {
@@ -252,11 +268,9 @@ module.exports = class AwsS3 extends Plugin {
   install () {
     this.uppy.addPreProcessor(this.prepareUpload)
     this.uppy.addUploader(this.upload)
-    this.uppy.addPostProcessor(this.finishUpload)
   }
 
   uninstall () {
-    this.uppy.removePostProcessor(this.finishUpload)
     this.uppy.removeUploader(this.upload)
     this.uppy.removePreProcessor(this.prepareUpload)
   }
