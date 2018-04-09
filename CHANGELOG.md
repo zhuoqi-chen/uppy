@@ -31,7 +31,7 @@ Ideas that will be planned and find their way into a release at one point
 - [ ] maybe restrict system file picking dialog too https://github.com/transloadit/uppy/issues/253
 - [ ] uppy-server: what happens if access token expires amid an upload/download process.
 - [ ] good way to change plugin options at runtime—maybe `this.state.options`?
-- [ ] s3: multipart/"resumable" uploads for large files (@goto-bus-stop)
+- [x] s3: multipart/"resumable" uploads for large files (@goto-bus-stop)
 - [ ] DnD Bar: drag and drop + statusbar or progressbar ? (@arturi)
 - [ ] possibility to work on already uploaded / in progress files #112, #113
 - [ ] possibility to edit/delete more than one file at once #118, #97
@@ -120,6 +120,7 @@ To be released: 2018-03-29.
 - [ ] uppy-server: document docker image setup for uppy-server (@ifedapoolarewaju)
 - [ ] xhrupload: emit a final `upload-progress` event in the XHRUpload plugin just before firing `upload-complete` (tus-js-client already handles this internally) (@arturi)
 - [x] s3: fix xhr response handlers (#625, @goto-bus-stop)
+- [x] s3: implement multipart uploads (#726, @goto-bus-stop)
 - [ ] test: add typescript with JSDoc (@arturi)
 - [ ] dragdrop: allow customizing arrow icon https://github.com/transloadit/uppy/pull/374#issuecomment-334116208 (@arturi)
 
